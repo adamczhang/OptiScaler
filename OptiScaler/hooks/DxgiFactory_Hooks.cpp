@@ -13,6 +13,8 @@
 #include <with_dx12/with_dx12.h>
 #include <wrapped/wrapped_swapchain.h>
 #include <with_dx12/dx11_with_dx12_sc.h>
+#include <dual_gpu/DualGpu.h>
+#include <dual_gpu/Dx12CrossAdapterSC.h>
 
 #include <d3d11.h>
 #include <magic_enum.hpp>
@@ -536,6 +538,20 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
                                       D3D12_COMMAND_LIST_TYPE_DIRECT);
         }
 
+        // Dual GPU: the game renders on this GPU, frame generation and presentation run on a second one
+        if (!_skipFGSwapChainCreation && DualGpu::Enabled())
+        {
+            ScopedSkipFGSCCreation skipFGSCCreation {};
+            FGSCResult = Dx12CrossAdapterSC::CreateForDesc(realFactory, o_CreateSwapChainForHwnd, realFactory,
+                                                           (ID3D12CommandQueue*) real, &localDesc, ppSwapChain);
+
+            if (FGSCResult == S_OK)
+            {
+                State::Instance().currentSwapchainDesc = localDesc;
+                return FGSCResult;
+            }
+        }
+
         // Create FG SwapChain
         if (!_skipFGSwapChainCreation)
         {
@@ -894,7 +910,10 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
 
     if (pDevice->QueryInterface(IID_PPV_ARGS(&cq)) == S_OK)
     {
-        if (State::Instance().currentD3D12Device == nullptr)
+        // Dual GPU: frame generation creates its swapchain on the second GPU's queue, which is never the game's
+        const bool secondGpuQueue = DualGpu::IsSecondGpuObject(cq);
+
+        if (State::Instance().currentD3D12Device == nullptr && !secondGpuQueue)
         {
             ID3D12Device* device = nullptr;
             if (cq->GetDevice(IID_PPV_ARGS(&device)) == S_OK)
@@ -916,12 +935,25 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
         if (!Util::CheckForRealObject(__FUNCTION__, cq, &real))
             real = cq;
 
-        State::Instance().currentCommandQueue = (ID3D12CommandQueue*) real;
+        if (!secondGpuQueue)
+            State::Instance().currentCommandQueue = (ID3D12CommandQueue*) real;
 
-        if (State::Instance().currentD3D12Device != nullptr)
+        if (State::Instance().currentD3D12Device != nullptr && !secondGpuQueue)
         {
             WithDx12::SetD3D12Objects(State::Instance().currentD3D12Device, State::Instance().currentCommandQueue,
                                       D3D12_COMMAND_LIST_TYPE_DIRECT);
+        }
+
+        // Dual GPU: the game renders on this GPU, frame generation and presentation run on a second one
+        if (!_skipFGSwapChainCreation && !secondGpuQueue && DualGpu::Enabled())
+        {
+            ScopedSkipFGSCCreation skipFGSCCreation {};
+            FGSCResult = Dx12CrossAdapterSC::CreateForHwnd(
+                realFactory, o_CreateSwapChainForHwnd, realFactory, (ID3D12CommandQueue*) real, hWnd, &localDesc,
+                pFullscreenDesc != nullptr ? &localFullscreenDesc : nullptr, pRestrictToOutput, ppSwapChain);
+
+            if (FGSCResult == S_OK)
+                return FGSCResult;
         }
 
         // Create FG SwapChain
