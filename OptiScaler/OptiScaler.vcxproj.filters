@@ -980,6 +980,9 @@
     <ClInclude Include="with_dx12\dx11_with_dx12_sc.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="dual_gpu\DualGpu.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="misc\HiddenWindow.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1668,6 +1671,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="with_dx12\dx11_with_dx12_sc.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="dual_gpu\DualGpu.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="inputs\FG\Upscaler_Inputs_Dx11wDx12.cpp">
