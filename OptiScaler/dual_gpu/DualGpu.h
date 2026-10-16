@@ -194,4 +194,25 @@ class DualGpu
     std::atomic<double> _gameFrameRate = 0.0;
 
     void UpdateGameFrameRate();
+
+    // Diagnostics: GPU timestamps of the handoff per slot (game queue: back buffer, depth and motion vector pairs;
+    // copy queue: one pair; second GPU: one pair)
+    static constexpr UINT kGameQueries = 6;
+    bool _timing = false;
+    ID3D12QueryHeap* _queryGame = nullptr;
+    ID3D12QueryHeap* _queryCopy = nullptr;
+    ID3D12QueryHeap* _querySecond = nullptr;
+    ID3D12Resource* _readbackGame = nullptr;
+    ID3D12Resource* _readbackCopy = nullptr;
+    ID3D12Resource* _readbackSecond = nullptr;
+    UINT64 _freqGame = 0;
+    UINT64 _freqCopy = 0;
+    UINT64 _freqSecond = 0;
+    bool _slotTimed[kSlots] {};
+    UINT64 _slotBytes[kSlots] {};
+    bool _inputTimed[kSlots][2] {};
+
+    void CreateTimestamps();
+    void ReleaseTimestamps();
+    void ReadTimings(UINT slot);
 };

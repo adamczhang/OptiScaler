@@ -15,6 +15,7 @@
 
 #include <misc/FrameLimit.h>
 #include <dual_gpu/DualGpu.h>
+#include <dual_gpu/DualGpuDiagnostics.h>
 
 #include <misc/IdentifyGpu.h>
 #include <hooks/Reflex_Hooks.h>
@@ -1169,6 +1170,10 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         }
 
         state.fgLastFrame++;
+
+        // Diagnostics: the game's presents with single GPU frame generation (dual GPU records its own)
+        if (!DualGpu::Instance().Active())
+            DualGpuDiagnostics::Instance().RecordGamePresent(0.0, 0.0);
 
         double ftDelta = 0.0f;
         auto now = Util::MillisecondsNow();

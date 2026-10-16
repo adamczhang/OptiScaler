@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "DualGpu.h"
+#include "DualGpuDiagnostics.h"
 
 #include <Config.h>
 #include <State.h>
@@ -400,13 +401,142 @@ bool DualGpu::CreateGameSide()
     }
 
     LOG_INFO("DualGpu: frames cross on the game GPU's {} queue", _useCopyQueue ? "copy" : "graphics");
+
+    if (DualGpuDiagnostics::Enabled())
+        CreateTimestamps();
+
     return true;
+}
+
+void DualGpu::ReleaseTimestamps()
+{
+    SafeRelease(_queryGame);
+    SafeRelease(_queryCopy);
+    SafeRelease(_querySecond);
+    SafeRelease(_readbackGame);
+    SafeRelease(_readbackCopy);
+    SafeRelease(_readbackSecond);
+    _timing = false;
+
+    for (UINT s = 0; s < kSlots; s++)
+    {
+        _slotTimed[s] = false;
+        _inputTimed[s][0] = _inputTimed[s][1] = false;
+    }
+}
+
+void DualGpu::CreateTimestamps()
+{
+    ReleaseTimestamps();
+
+    auto makeReadback = [](ID3D12Device* device, UINT64 size, ID3D12Resource** out)
+    {
+        D3D12_HEAP_PROPERTIES heap {};
+        heap.Type = D3D12_HEAP_TYPE_READBACK;
+        auto desc = BufferDesc(size, D3D12_RESOURCE_FLAG_NONE);
+        return SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(out)));
+    };
+
+    D3D12_QUERY_HEAP_DESC queryDesc {};
+    queryDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    queryDesc.Count = kSlots * kGameQueries;
+
+    bool ok = SUCCEEDED(_gameDevice->CreateQueryHeap(&queryDesc, IID_PPV_ARGS(&_queryGame))) &&
+              makeReadback(_gameDevice, queryDesc.Count * sizeof(UINT64), &_readbackGame) &&
+              SUCCEEDED(_gameQueue->GetTimestampFrequency(&_freqGame));
+
+    queryDesc.Count = kSlots * 2;
+    ok = ok && SUCCEEDED(_secondDevice->CreateQueryHeap(&queryDesc, IID_PPV_ARGS(&_querySecond))) &&
+         makeReadback(_secondDevice, queryDesc.Count * sizeof(UINT64), &_readbackSecond) &&
+         SUCCEEDED(_secondQueue->GetTimestampFrequency(&_freqSecond));
+
+    if (ok && _useCopyQueue)
+    {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3 {};
+        if (SUCCEEDED(_gameDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS3, &options3, sizeof(options3))) &&
+            options3.CopyQueueTimestampQueriesSupported)
+        {
+            D3D12_QUERY_HEAP_DESC copyDesc {};
+            copyDesc.Type = D3D12_QUERY_HEAP_TYPE_COPY_QUEUE_TIMESTAMP;
+            copyDesc.Count = kSlots * 2;
+
+            if (FAILED(_gameDevice->CreateQueryHeap(&copyDesc, IID_PPV_ARGS(&_queryCopy))) ||
+                !makeReadback(_gameDevice, copyDesc.Count * sizeof(UINT64), &_readbackCopy) ||
+                FAILED(_copyQueue->GetTimestampFrequency(&_freqCopy)))
+            {
+                SafeRelease(_queryCopy);
+                SafeRelease(_readbackCopy);
+            }
+        }
+    }
+
+    if (!ok)
+        ReleaseTimestamps();
+
+    _timing = ok;
+    LOG_INFO("DualGpu: GPU timestamps {}, copy queue timestamps {}", _timing, _queryCopy != nullptr);
+}
+
+void DualGpu::ReadTimings(UINT slot)
+{
+    auto toMs = [](UINT64 begin, UINT64 end, UINT64 frequency)
+    {
+        if (frequency == 0 || end < begin)
+            return -1.0;
+
+        const double ms = (double) (end - begin) * 1000.0 / (double) frequency;
+        return ms > 1000.0 ? -1.0 : ms;
+    };
+
+    auto read = [](ID3D12Resource* readback, UINT first, UINT count, UINT64* out)
+    {
+        UINT64* data = nullptr;
+        D3D12_RANGE range { first * sizeof(UINT64), (first + count) * sizeof(UINT64) };
+        if (FAILED(readback->Map(0, &range, (void**) &data)) || data == nullptr)
+            return false;
+
+        for (UINT i = 0; i < count; i++)
+            out[i] = data[first + i];
+
+        D3D12_RANGE written {};
+        readback->Unmap(0, &written);
+        return true;
+    };
+
+    UINT64 game[kGameQueries] {};
+    if (!read(_readbackGame, slot * kGameQueries, kGameQueries, game))
+        return;
+
+    const double colorMs = toMs(game[0], game[1], _freqGame);
+    double inputsMs = 0.0;
+    for (UINT pair = 1; pair < kGameQueries / 2; pair++)
+    {
+        const double ms = toMs(game[pair * 2], game[pair * 2 + 1], _freqGame);
+        if (ms > 0.0)
+            inputsMs += ms;
+    }
+
+    double copyMs = -1.0;
+    UINT64 copy[2] {};
+    if (_readbackCopy != nullptr && read(_readbackCopy, slot * 2, 2, copy))
+        copyMs = toMs(copy[0], copy[1], _freqCopy);
+
+    double secondMs = -1.0;
+    UINT64 second[2] {};
+    if (read(_readbackSecond, slot * 2, 2, second))
+        secondMs = toMs(second[0], second[1], _freqSecond);
+
+    if (colorMs >= 0.0)
+        DualGpuDiagnostics::Instance().RecordGpuTimings(colorMs, inputsMs, copyMs, secondMs,
+                                                        (double) _slotBytes[slot] / 1.0e6);
 }
 
 void DualGpu::ReleaseGameSide()
 {
     WaitIdleLocked();
     ReleaseSurfacesLocked();
+    ReleaseTimestamps();
 
     ReleaseRing(_copyRing);
     SafeRelease(_staged);
@@ -774,7 +904,20 @@ ID3D12Resource* DualGpu::StageInput(FG_ResourceType type, int fIndex, ID3D12Grap
 
     if (cmdList != nullptr)
     {
+        // Timed with the coming present's slot, which TransferFrame resolves
+        const bool timed = _timing && type <= FG_ResourceType::Velocity;
+        const UINT query = _presentSlot * kGameQueries + 2 + 2 * (UINT) type;
+
+        if (timed)
+            cmdList->EndQuery(_queryGame, D3D12_QUERY_TYPE_TIMESTAMP, query);
+
         RecordCopyOut(cmdList, surface, source, state);
+
+        if (timed)
+        {
+            cmdList->EndQuery(_queryGame, D3D12_QUERY_TYPE_TIMESTAMP, query + 1);
+            _inputTimed[_presentSlot][type] = true;
+        }
     }
     else
     {
@@ -802,6 +945,13 @@ bool DualGpu::TransferFrame(ID3D12Resource* backBuffer, ID3D12Resource* target)
 
     WaitForSlot(_colorConsumed[slot]);
 
+    // This slot's previous use has finished on every queue, so its timestamps are ready
+    if (_timing && _slotTimed[slot])
+        ReadTimings(slot);
+
+    _slotTimed[slot] = false;
+    const UINT queryGame = slot * kGameQueries;
+
     auto& color = _color[slot];
     if (!EnsureSurface(color, backBuffer, false))
         return false;
@@ -811,7 +961,13 @@ bool DualGpu::TransferFrame(ID3D12Resource* backBuffer, ID3D12Resource* target)
     if (gameList == nullptr)
         return false;
 
+    if (_timing)
+        gameList->EndQuery(_queryGame, D3D12_QUERY_TYPE_TIMESTAMP, queryGame);
+
     RecordCopyOut(gameList, color, backBuffer, D3D12_RESOURCE_STATE_PRESENT);
+
+    if (_timing)
+        gameList->EndQuery(_queryGame, D3D12_QUERY_TYPE_TIMESTAMP, queryGame + 1);
 
     for (auto& pending : _pending)
     {
@@ -820,6 +976,22 @@ bool DualGpu::TransferFrame(ID3D12Resource* backBuffer, ID3D12Resource* target)
 
         RecordCopyOut(gameList, _inputs[pending.slot][pending.type], pending.deferredSource, pending.deferredState);
         SafeRelease(pending.deferredSource);
+    }
+
+    if (_timing)
+    {
+        // Inputs that didn't come this frame get an empty pair, so every query in the slot is written
+        for (UINT type = 0; type < 2; type++)
+        {
+            if (_inputTimed[slot][type])
+                continue;
+
+            gameList->EndQuery(_queryGame, D3D12_QUERY_TYPE_TIMESTAMP, queryGame + 2 + 2 * type);
+            gameList->EndQuery(_queryGame, D3D12_QUERY_TYPE_TIMESTAMP, queryGame + 3 + 2 * type);
+        }
+
+        gameList->ResolveQueryData(_queryGame, D3D12_QUERY_TYPE_TIMESTAMP, queryGame, kGameQueries, _readbackGame,
+                                   queryGame * sizeof(UINT64));
     }
 
     if (!SubmitRing(_gameRing, slot, _gameQueue))
@@ -837,12 +1009,22 @@ bool DualGpu::TransferFrame(ID3D12Resource* backBuffer, ID3D12Resource* target)
         if (copyList == nullptr)
             return false;
 
+        if (_queryCopy != nullptr)
+            copyList->EndQuery(_queryCopy, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2);
+
         copyList->CopyBufferRegion(color.shared, 0, color.staging, 0, color.bytes);
 
         for (auto& pending : _pending)
         {
             auto& surface = _inputs[pending.slot][pending.type];
             copyList->CopyBufferRegion(surface.shared, 0, surface.staging, 0, surface.bytes);
+        }
+
+        if (_queryCopy != nullptr)
+        {
+            copyList->EndQuery(_queryCopy, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);
+            copyList->ResolveQueryData(_queryCopy, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2, 2, _readbackCopy,
+                                       slot * 2 * sizeof(UINT64));
         }
 
         _copyQueue->Wait(_staged, value);
@@ -862,6 +1044,9 @@ bool DualGpu::TransferFrame(ID3D12Resource* backBuffer, ID3D12Resource* target)
     if (secondList == nullptr)
         return false;
 
+    if (_timing)
+        secondList->EndQuery(_querySecond, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2);
+
     Barrier(secondList, target, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
     RecordCopyIn(secondList, color, target);
     Barrier(secondList, target, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
@@ -878,10 +1063,21 @@ bool DualGpu::TransferFrame(ID3D12Resource* backBuffer, ID3D12Resource* target)
         bytes += surface.bytes;
     }
 
+    if (_timing)
+    {
+        secondList->EndQuery(_querySecond, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);
+        secondList->ResolveQueryData(_querySecond, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2, 2, _readbackSecond,
+                                     slot * 2 * sizeof(UINT64));
+    }
+
     if (!SubmitRing(_secondRing, slot, _secondQueue))
         return false;
 
     _secondQueue->Signal(_consumed, value);
+
+    _slotBytes[slot] = bytes;
+    _slotTimed[slot] = _timing;
+    _inputTimed[slot][0] = _inputTimed[slot][1] = false;
 
     _colorConsumed[slot] = value;
     for (auto& pending : _pending)

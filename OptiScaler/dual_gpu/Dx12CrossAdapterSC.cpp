@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "Dx12CrossAdapterSC.h"
 #include "DualGpu.h"
+#include "DualGpuDiagnostics.h"
 
 #include <hooks/FG_Hooks.h>
 #include <menu/menu_overlay_dx.h>
@@ -273,6 +274,7 @@ HRESULT STDMETHODCALLTYPE Dx12CrossAdapterSC::Present(UINT SyncInterval, UINT Fl
 
     ID3D12Resource* backBuffer = nullptr;
     ID3D12Resource* target = nullptr;
+    const auto transferStart = DualGpuDiagnostics::NowMs();
 
     _gameSwapChain->GetBuffer(GetCurrentBackBufferIndex(), IID_PPV_ARGS(&backBuffer));
     _presentSwapChain->GetBuffer(_presentSwapChain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&target));
@@ -287,8 +289,14 @@ HRESULT STDMETHODCALLTYPE Dx12CrossAdapterSC::Present(UINT SyncInterval, UINT Fl
     SafeRelease(backBuffer);
     SafeRelease(target);
 
+    const auto presentStart = DualGpuDiagnostics::NowMs();
+
     // Through FGHooks::FGPresent, which dispatches frame generation on the second GPU
-    return _presentSwapChain->Present(SyncInterval, Flags);
+    auto result = _presentSwapChain->Present(SyncInterval, Flags);
+
+    const auto presentEnd = DualGpuDiagnostics::NowMs();
+    DualGpuDiagnostics::Instance().RecordGamePresent(presentStart - transferStart, presentEnd - presentStart);
+    return result;
 }
 
 HRESULT STDMETHODCALLTYPE Dx12CrossAdapterSC::GetBuffer(UINT Buffer, REFIID riid, void** ppSurface)

@@ -8,6 +8,7 @@
 #include <hooks/Reflex_Hooks.h>
 #include <hooks/D3D12_Hooks.h>
 #include <dual_gpu/DualGpu.h>
+#include <dual_gpu/DualGpuDiagnostics.h>
 #include <with_dx12/dx11_with_dx12_sync.h>
 
 #include <menu/menu_overlay_dx.h>
@@ -354,6 +355,10 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         // Dual GPU: frame generation's swapchain on the second GPU presents through here; the game's queue and
         // device stay the game's
         const bool secondGpu = DualGpu::IsSecondGpuObject(cq);
+
+        // Diagnostics: presents that reach the screen, the second GPU's in dual mode, the game's otherwise
+        if (willPresent && (secondGpu || !DualGpu::Instance().Active()))
+            DualGpuDiagnostics::Instance().RecordOutputPresent();
 
         if (State::Instance().currentCommandQueue == nullptr && !secondGpu)
             State::Instance().currentCommandQueue = cq;
