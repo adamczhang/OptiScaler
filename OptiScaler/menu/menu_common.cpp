@@ -14,6 +14,7 @@
 
 #include <framegen/nvngx/Nvngx_FG.h>
 #include <framegen/reprojection/Reprojection_Dx12.h>
+#include <dual_gpu/DualGpu.h>
 
 #include <nvapi/fakenvapi.h>
 #include <hooks/Reflex_Hooks.h>
@@ -4149,6 +4150,88 @@ void MenuCommon::RenderFGModeSlider(RenderMenuContext& ctx, const char* label, i
         ShowTooltip("Frame Generation mode");
 }
 
+void MenuCommon::RenderDualGpuSettings(RenderMenuContext& ctx)
+{
+    auto config = ctx.config;
+    auto& menuResScale = ctx.menuResScale;
+
+    if (auto ch = ScopedCollapsingHeader("Dual GPU"); ch.IsHeaderOpen())
+    {
+        ScopedIndent indent {};
+        auto& dual = DualGpu::Instance();
+
+        bool enabled = config->DualGpuEnabled.value_or_default();
+        if (ImGui::Checkbox("Run on a second GPU", &enabled))
+            config->DualGpuEnabled = enabled;
+
+        ShowTooltip("Frame generation and presentation run on a second GPU,\n"
+                    "while the game keeps rendering on its own GPU.\n\n"
+                    "Save Settings and restart the game to apply.");
+
+        // Hardware adapters, read once: setting value and label
+        static std::vector<std::pair<std::string, std::string>> adapters;
+        if (adapters.empty())
+        {
+            adapters.emplace_back("auto", "Automatic (the monitor's GPU)");
+
+            ScopedSkipSpoofingGlobal skipSpoofing {};
+            IDXGIFactory1* factory = nullptr;
+            if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+            {
+                IDXGIAdapter1* adapter = nullptr;
+                for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; i++)
+                {
+                    DXGI_ADAPTER_DESC1 desc {};
+                    adapter->GetDesc1(&desc);
+
+                    if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0)
+                        adapters.emplace_back(StrFmt("index:%u", i), wstring_to_string(desc.Description));
+
+                    adapter->Release();
+                }
+
+                factory->Release();
+            }
+        }
+
+        const auto current = config->DualGpuPresentAdapter.value_or_default();
+        auto currentLabel = current;
+        for (const auto& [value, label] : adapters)
+        {
+            if (value == current)
+                currentLabel = label;
+        }
+
+        ImGui::PushItemWidth(220.0f * menuResScale);
+        if (ImGui::BeginCombo("Second GPU", currentLabel.c_str()))
+        {
+            for (const auto& [value, label] : adapters)
+            {
+                if (ImGui::Selectable(label.c_str(), value == current))
+                    config->DualGpuPresentAdapter = value;
+            }
+
+            ImGui::EndCombo();
+        }
+        ImGui::PopItemWidth();
+
+        ShowTooltip("The GPU that runs frame generation and presents.\n"
+                    "Automatic picks the GPU the monitor is connected to.\n\n"
+                    "Save Settings and restart the game to apply.");
+
+        if (dual.Active())
+        {
+            ImGui::Text("Presenting on %s", dual.SecondGpuName().c_str());
+            ImGui::Text("Handoff: %.1f MB per frame on the %s queue", dual.MegabytesPerFrame(),
+                        dual.UsesCopyQueue() ? "copy" : "game's");
+        }
+        else if (enabled)
+        {
+            ImGui::TextDisabled("Not active: restart the game, or see the log");
+        }
+    }
+}
+
 void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
@@ -4252,6 +4335,8 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 ShowTooltip("After changing this option, please Save Settings\n"
                             "It will be applied on next launch.");
             }
+
+            RenderDualGpuSettings(ctx);
 
             ImGui::Spacing();
 
