@@ -110,6 +110,7 @@ enum class SwapchainInteropApi : uint32_t
 {
     None,
     Dx11wDx12,
+    Dx12CrossAdapter, // Dual GPU: game on its own GPU, frame generation and presentation on a second one
 };
 
 enum class ColorTransfer : uint32_t
