@@ -5,6 +5,7 @@
 #include <State.h>
 #include <Util.h>
 
+#include <dual_gpu/DualGpu.h>
 #include <hudfix/Hudfix_Dx11.h>
 #include <hudfix/Hudfix_Dx12.h>
 #include <menu/menu_overlay_dx.h>
@@ -1476,6 +1477,10 @@ void FSRFG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
 
     OwnedLockGuard lock(Mutex, 555);
 
+    // Dual GPU: frame generation runs on the second GPU, whatever device the game side passes in
+    if (DualGpu::Instance().Active())
+        device = DualGpu::Instance().SecondDevice();
+
     _constants = fgConstants;
 
     if (!FfxApiProxy::IsFGReady())
@@ -1648,6 +1653,29 @@ bool FSRFG_Dx12::SetResource(Dx12Resource* inputResource)
         return false;
     }
 
+    // Dual GPU: the input is on the game's GPU. Its copy to the second GPU is recorded on the game's command list,
+    // and frame generation reads the second GPU's copy, filled in at present before the prepare pass runs
+    if (DualGpu::Instance().Active())
+    {
+        auto copy = DualGpu::Instance().StageInput(type, fIndex, inputResource->cmdList, inputResource->resource,
+                                                   inputResource->state);
+        if (copy == nullptr)
+            return false;
+
+        _frameResources[fIndex][type] = {};
+        auto fResource = &_frameResources[fIndex][type];
+        fResource->type = type;
+        fResource->resource = copy;
+        fResource->state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        fResource->validity = FG_ResourceValidity::UntilPresent;
+        fResource->width = inputResource->width;
+        fResource->height = inputResource->height;
+        fResource->frameIndex = fIndex;
+
+        SetResourceReady(type, fIndex);
+        return true;
+    }
+
     _frameResources[fIndex][type] = {};
     auto fResource = &_frameResources[fIndex][type];
     fResource->type = type;
@@ -1763,7 +1791,12 @@ bool FSRFG_Dx12::SetResource(Dx12Resource* inputResource)
     return true;
 }
 
-void FSRFG_Dx12::SetCommandQueue(FG_ResourceType type, ID3D12CommandQueue* queue) { _gameCommandQueue = queue; }
+void FSRFG_Dx12::SetCommandQueue(FG_ResourceType type, ID3D12CommandQueue* queue)
+{
+    // Dual GPU: frame generation's work stays on the second GPU's queue
+    if (!DualGpu::Instance().Active())
+        _gameCommandQueue = queue;
+}
 
 void FSRFG_Dx12::CreateObjects(ID3D12Device* InDevice)
 {

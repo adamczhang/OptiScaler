@@ -14,6 +14,7 @@
 #include <resource_tracking/ResTrack_Dx12.h>
 
 #include <misc/FrameLimit.h>
+#include <dual_gpu/DualGpu.h>
 
 #include <misc/IdentifyGpu.h>
 #include <hooks/Reflex_Hooks.h>
@@ -1333,7 +1334,9 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     if (auto fg = state.currentFG; willPresent && fg != nullptr &&
                                    (state.activeFgOutput == FGOutput::FSRFG || state.activeFgOutput == FGOutput::XeFG))
     {
-        gameQueue = fg->GetCommandQueue();
+        // Dual GPU: frame generation's queue is on the second GPU, possibly another vendor's, but the game presents
+        // from its own queue; handing Reflex another vendor's queue corrupts memory
+        gameQueue = DualGpu::Instance().Active() ? DualGpu::Instance().GameQueue() : fg->GetCommandQueue();
         frameMultiplier = fg->IsActive() && !fg->IsPaused() ? fg->GetInterpolatedFrameCount() + 1 : 1;
         InputCommon::fg_game_present(gameQueue, false, frameMultiplier);
 

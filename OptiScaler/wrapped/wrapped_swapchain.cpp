@@ -7,6 +7,7 @@
 #include <nvapi/fakenvapi.h>
 #include <hooks/Reflex_Hooks.h>
 #include <hooks/D3D12_Hooks.h>
+#include <dual_gpu/DualGpu.h>
 #include <with_dx12/dx11_with_dx12_sync.h>
 
 #include <menu/menu_overlay_dx.h>
@@ -350,10 +351,14 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
         State::Instance().swapchainApi = DX12;
 
-        if (State::Instance().currentCommandQueue == nullptr)
+        // Dual GPU: frame generation's swapchain on the second GPU presents through here; the game's queue and
+        // device stay the game's
+        const bool secondGpu = DualGpu::IsSecondGpuObject(cq);
+
+        if (State::Instance().currentCommandQueue == nullptr && !secondGpu)
             State::Instance().currentCommandQueue = cq;
 
-        if (cq->GetDevice(IID_PPV_ARGS(&device12)) == S_OK)
+        if (!secondGpu && cq->GetDevice(IID_PPV_ARGS(&device12)) == S_OK)
         {
             device12->Release();
 
@@ -490,7 +495,9 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
             // For the Reflex output (and AntiLag 2 with XeFG), the generated and real frames' presents as DLSSG
             // reports them
-            if (fgIsActive && pDevice != nullptr && pDevice->QueryInterface(IID_PPV_ARGS(&fgPresentQueue)) == S_OK)
+            // Dual GPU: not for the second GPU's presents, Reflex must not be handed another vendor's queue
+            if (fgIsActive && pDevice != nullptr && !DualGpu::IsSecondGpuObject(pDevice) &&
+                pDevice->QueryInterface(IID_PPV_ARGS(&fgPresentQueue)) == S_OK)
             {
                 fgFrameMultiplier = fg->GetInterpolatedFrameCount() + 1;
                 InputCommon::fg_output_present(fgPresentQueue, false, fgFrameMultiplier);
@@ -1297,8 +1304,11 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers1(UINT BufferCoun
     if (*ppPresentQueue != nullptr)
     {
         auto state = &State::Instance();
-        state->currentCommandQueue = (ID3D12CommandQueue*) *ppPresentQueue;
-        _device = state->currentCommandQueue;
+        _device = *ppPresentQueue;
+
+        // Dual GPU: the second GPU's queue is never the game's
+        if (!DualGpu::IsSecondGpuObject(*ppPresentQueue))
+            state->currentCommandQueue = (ID3D12CommandQueue*) *ppPresentQueue;
     }
 
     if (State::Instance().activeFgOutput == FGOutput::FSRFG &&
