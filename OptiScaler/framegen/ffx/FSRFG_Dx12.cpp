@@ -1672,6 +1672,32 @@ bool FSRFG_Dx12::SetResource(Dx12Resource* inputResource)
         fResource->height = inputResource->height;
         fResource->frameIndex = fIndex;
 
+        if (type == FG_ResourceType::UIColor)
+        {
+            _noUi[fIndex] = false;
+        }
+        else if (type == FG_ResourceType::Distortion)
+        {
+            _noDistortionField[fIndex] = false;
+        }
+        else if (type == FG_ResourceType::HudlessColor)
+        {
+            // Converted to the swapchain format on the second GPU, after the copy arrives
+            auto scFormat = State::Instance().currentSwapchainDesc.BufferDesc.Format;
+            auto copyFormat = copy->GetDesc().Format;
+            _lastHudlessFormat = (FfxApiSurfaceFormat) ffxApiGetSurfaceFormatDX12(copyFormat);
+
+            if (_lastHudlessFormat != FFX_API_SURFACE_FORMAT_UNKNOWN && !CompareResourceFormats(copyFormat, scFormat) &&
+                !HudlessFormatTransfer(fIndex, _device, scFormat, fResource))
+            {
+                _lastHudlessFormat = FFX_API_SURFACE_FORMAT_UNKNOWN;
+                _frameResources[fIndex][type] = {};
+                return false;
+            }
+
+            _noHudless[fIndex] = false;
+        }
+
         SetResourceReady(type, fIndex);
         return true;
     }

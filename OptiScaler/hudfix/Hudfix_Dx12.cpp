@@ -6,6 +6,7 @@
 #include <Config.h>
 
 #include <framegen/IFGFeature_Dx12.h>
+#include <dual_gpu/DualGpu.h>
 #include <resource_tracking/ResTrack_dx12.h>
 
 namespace
@@ -167,8 +168,12 @@ void Hudfix_Dx12::ProcessPendingCaptureRemovals()
         pendingResources.swap(_pendingCaptureRemovals);
     }
 
+    // Captures live on the game's GPU; in dual GPU mode frame generation's queue is on the second one
     auto* fg = State::Instance().currentFG;
     ID3D12CommandQueue* queue = fg != nullptr ? fg->GetCommandQueue() : nullptr;
+    if (DualGpu::Instance().Active())
+        queue = DualGpu::Instance().GameQueue();
+
     if (queue == nullptr)
         queue = State::Instance().currentCommandQueue;
 
@@ -667,6 +672,10 @@ bool Hudfix_Dx12::CheckForHudless(ID3D12GraphicsCommandList* cmdList, ResourceIn
             break;
         }
 
+        // Dual GPU: the second GPU only runs frame generation, never the game's HUD-less image
+        if (DualGpu::Instance().Active() && DualGpu::IsSecondGpuObject(cmdList))
+            break;
+
         LOG_DEBUG("Waiting _checkMutex");
         std::lock_guard<std::mutex> lock(_checkMutex);
         ScopedBoolFlag checkOwnership(_checkMutexOwned);
@@ -896,8 +905,9 @@ bool Hudfix_Dx12::CheckForHudless(ID3D12GraphicsCommandList* cmdList, ResourceIn
 
         auto fg = s.currentFG;
 
-        // needs conversion?
-        if (!CompareResourceFormats(resource->format, s.currentSwapchainDesc.BufferDesc.Format))
+        // needs conversion? (dual GPU: frame generation converts it on the second GPU)
+        if (!CompareResourceFormats(resource->format, s.currentSwapchainDesc.BufferDesc.Format) &&
+            !DualGpu::Instance().Active())
         {
             if (_formatTransfer[fIndex] == nullptr ||
                 !_formatTransfer[fIndex]->IsFormatCompatible(s.currentSwapchainDesc.BufferDesc.Format))

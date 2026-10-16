@@ -4823,7 +4823,8 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             const bool dx11HudfixTracking = state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
             const bool hudfixTrackingSupported =
                 !Config::Instance()->FGDisableHUDFix.value_or_default() &&
-                (state.swapchainInteropApi == SwapchainInteropApi::None || dx11HudfixTracking);
+                (state.swapchainInteropApi == SwapchainInteropApi::None ||
+                 state.swapchainInteropApi == SwapchainInteropApi::Dx12CrossAdapter || dx11HudfixTracking);
 
             if (hudfixTrackingSupported)
             {

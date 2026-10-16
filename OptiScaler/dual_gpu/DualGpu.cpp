@@ -741,11 +741,12 @@ ID3D12Resource* DualGpu::StageInput(FG_ResourceType type, int fIndex, ID3D12Grap
     if (_secondDevice == nullptr || source == nullptr || fIndex < 0)
         return nullptr;
 
-    if (type != FG_ResourceType::Depth && type != FG_ResourceType::Velocity)
+    // The presented image itself crosses in TransferFrame
+    if (type == FG_ResourceType::Color)
     {
         if (!_loggedUnsupported[type])
         {
-            LOG_WARN("DualGpu: {} is not carried to the second GPU yet, ignoring it", magic_enum::enum_name(type));
+            LOG_WARN("DualGpu: {} inputs are not carried to the second GPU", magic_enum::enum_name(type));
             _loggedUnsupported[type] = true;
         }
 

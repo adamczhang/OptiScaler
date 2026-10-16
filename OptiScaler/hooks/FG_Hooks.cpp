@@ -1284,7 +1284,11 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         LOG_TRACE("FGHooks::FGPresent: FG feature exists but is inactive/paused; pass-through present only");
     }
 
-    if (willPresent && state.swapchainInteropApi == SwapchainInteropApi::None)
+    // The HUD fix tracks the game's own DX12 rendering, also when frame generation runs on a second GPU
+    const bool dx12HudfixPresent = state.swapchainInteropApi == SwapchainInteropApi::None ||
+                                   state.swapchainInteropApi == SwapchainInteropApi::Dx12CrossAdapter;
+
+    if (willPresent && dx12HudfixPresent)
     {
         ResTrack_Dx12::ClearPossibleHudless();
         Hudfix_Dx12::PresentStart();
@@ -1396,7 +1400,7 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         StreamlineProxy::ReflexSleep()(*localToken);
     }
 
-    if (state.swapchainInteropApi == SwapchainInteropApi::None)
+    if (dx12HudfixPresent)
         Hudfix_Dx12::PresentEnd();
 
     // DXVK's DXGI presents through Vulkan where the limiter already sleeps

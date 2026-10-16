@@ -50,9 +50,10 @@ class DualGpu
     bool IsSecondGpu(IUnknown* obj) const;
     static bool IsSecondGpuObject(IUnknown* obj) { return Instance().IsSecondGpu(obj); }
 
-    // A frame generation input (depth or motion vectors) on the game GPU. Records its copy on cmdList, or at present
-    // time when cmdList is null. Returns the second GPU texture the input will be in, in NON_PIXEL_SHADER_RESOURCE
-    // state, once this frame's TransferFrame has run; frame generation reads it there on the second GPU's queue.
+    // A frame generation input on the game GPU (depth, motion vectors, HUD-less colour, UI, distortion). Records its
+    // copy on cmdList, or at present time when cmdList is null. Returns the second GPU texture the input will be in, in
+    // NON_PIXEL_SHADER_RESOURCE state, once this frame's TransferFrame has run; frame generation reads it there on the
+    // second GPU's queue.
     ID3D12Resource* StageInput(FG_ResourceType type, int fIndex, ID3D12GraphicsCommandList* cmdList,
                                ID3D12Resource* source, D3D12_RESOURCE_STATES state);
 
