@@ -128,6 +128,13 @@ bool Config::Reload(std::filesystem::path iniPath)
             FGHudCutoff.set_from_config(readFloat("FrameGen", "HudCutoff"));
         }
 
+        // Dual GPU
+        {
+            DualGpuEnabled.set_from_config(readBool("DualGpu", "Enabled"));
+            DualGpuPresentAdapter.set_from_config(readString("DualGpu", "PresentAdapter"));
+            DualGpuCopyQueue.set_from_config(readBool("DualGpu", "CopyQueue"));
+        }
+
         // FSR FG
         {
             FGDebugTearLines.set_from_config(readBool("FSRFG", "DebugTearLines"));
@@ -958,6 +965,12 @@ bool Config::SaveIni()
         ini.SetValue("FSRFG", "DebugPacingLines",
                      GetBoolValue(Instance()->FGDebugPacingLines.value_for_config()).c_str());
         ini.SetValue("FSRFG", "AllowAsync", GetBoolValue(Instance()->FGAsync.value_for_config()).c_str());
+
+        ini.SetValue("DualGpu", "Enabled", GetBoolValue(Instance()->DualGpuEnabled.value_for_config()).c_str());
+        ini.SetValue("DualGpu", "PresentAdapter",
+                     Instance()->DualGpuPresentAdapter.value_for_config_or("auto").c_str());
+        ini.SetValue("DualGpu", "CopyQueue", GetBoolValue(Instance()->DualGpuCopyQueue.value_for_config()).c_str());
+
         ini.SetValue("FSRFG", "UseMutexForSwapchain",
                      GetBoolValue(Instance()->FGUseMutexForSwapchain.value_for_config()).c_str());
         ini.SetValue("FSRFG", "FramePacingTuning",

@@ -615,6 +615,11 @@ class Config
     CustomOptional<bool> FGDebugTearLines { false };
     CustomOptional<bool> FGDebugPacingLines { false };
     CustomOptional<bool> FGAsync { false };
+
+    // Dual GPU: frame generation and presentation on a second GPU
+    CustomOptional<bool> DualGpuEnabled { false };
+    CustomOptional<std::string> DualGpuPresentAdapter { "auto" };
+    CustomOptional<bool> DualGpuCopyQueue { true };
     CustomOptional<bool> FGFramePacingTuning { true };
     CustomOptional<float> FGFPTSafetyMarginInMs { 0.01f };
     CustomOptional<float> FGFPTVarianceFactor { 0.3f };
