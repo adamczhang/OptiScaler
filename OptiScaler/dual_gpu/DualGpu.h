@@ -6,6 +6,7 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -72,6 +73,10 @@ class DualGpu
     bool UsesCopyQueue() const { return _useCopyQueue; }
     double MegabytesPerFrame() const { return (double) _bytesPerFrame / 1.0e6; }
     UINT64 FramesTransferred() const { return _framesTransferred; }
+
+    // The game's own frame rate, measured as its frames reach the second GPU, 0 until known. Generated frames don't
+    // count, so the FPS overlay can show both rates without deriving one from the other.
+    double GameFrameRate() const { return _gameFrameRate; }
 
   private:
     // One surface both GPUs can reach: a heap created on the game GPU and opened on the second GPU, a placed buffer
@@ -178,4 +183,15 @@ class DualGpu
 
     UINT64 _bytesPerFrame = 0;
     UINT64 _framesTransferred = 0;
+
+    // Game frame rate over the last kRateFrames transferred frames, about the span the FPS overlay averages
+    static constexpr UINT kRateFrames = 50;
+    double _rateIntervals[kRateFrames] {};
+    double _rateSum = 0.0;
+    UINT _rateIndex = 0;
+    UINT _rateCount = 0;
+    double _lastTransfer = 0.0;
+    std::atomic<double> _gameFrameRate = 0.0;
+
+    void UpdateGameFrameRate();
 };

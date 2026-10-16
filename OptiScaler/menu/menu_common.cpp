@@ -2364,7 +2364,9 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
 
             if (interpolatedFrameCount)
             {
-                const double baseFps = frameRate / (double) (interpolatedFrameCount + 1);
+                // Dual GPU: measured as the game's frames reach the second GPU, not derived from the output rate
+                const double gameFps = DualGpu::Instance().Active() ? DualGpu::Instance().GameFrameRate() : 0.0;
+                const double baseFps = gameFps > 0.0 ? gameFps : frameRate / (double) (interpolatedFrameCount + 1);
 
                 switch (overlayType)
                 {

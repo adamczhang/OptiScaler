@@ -3,6 +3,7 @@
 
 #include <Config.h>
 #include <State.h>
+#include <Util.h>
 
 #include <misc/IdentifyGpu.h>
 
@@ -889,7 +890,26 @@ bool DualGpu::TransferFrame(ID3D12Resource* backBuffer, ID3D12Resource* target)
     _pending.clear();
     _bytesPerFrame = bytes;
     _framesTransferred++;
+    UpdateGameFrameRate();
     return true;
+}
+
+void DualGpu::UpdateGameFrameRate()
+{
+    const double now = Util::MillisecondsNow();
+    const double interval = _lastTransfer > 0.0 ? now - _lastTransfer : 0.0;
+    _lastTransfer = now;
+
+    // Skips the first frame and gaps such as loading screens
+    if (interval <= 0.0 || interval > 1000.0)
+        return;
+
+    _rateSum += interval - _rateIntervals[_rateIndex];
+    _rateIntervals[_rateIndex] = interval;
+    _rateIndex = (_rateIndex + 1) % kRateFrames;
+    _rateCount = std::min(_rateCount + 1, kRateFrames);
+
+    _gameFrameRate = _rateCount * 1000.0 / _rateSum;
 }
 
 void DualGpu::WaitIdle()
